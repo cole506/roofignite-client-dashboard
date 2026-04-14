@@ -1,0 +1,568 @@
+// ═══════════════════════════════════════════════
+// RoofIgnite Client Portal
+// ═══════════════════════════════════════════════
+
+const SHEET_ID = CONFIG.SHEET_ID;
+const SHEETS = CONFIG.SHEETS;
+const AUTH_KEY = 'ri_client_user';
+const AUTH_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+let currentUser = null;   // { email, name, picture }
+let isAdmin = false;
+let allowedAccounts = [];  // account names this user can see
+let allAccounts = [];
+let allCycles = [];
+
+// ═══════════════════════════════════════════════
+//  AUTH
+// ═══════════════════════════════════════════════
+
+function decodeJwt(token) {
+  const payload = token.split('.')[1];
+  return JSON.parse(atob(payload.replace(/-/g,'+').replace(/_/g,'/')));
+}
+
+function checkExistingSession() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AUTH_KEY));
+    if (stored && stored.email && (Date.now() - stored.ts) < AUTH_TTL) {
+      onAuthSuccess(stored, false);
+      return;
+    }
+  } catch(e) {}
+  showLoginGate();
+}
+
+function showLoginGate() {
+  document.getElementById('login-gate').classList.remove('hidden');
+  let retries = 0;
+  const init = () => {
+    if (typeof google !== 'undefined' && google.accounts) {
+      google.accounts.id.initialize({
+        client_id: CONFIG.GOOGLE_CLIENT_ID,
+        callback: handleGoogleSignIn,
+        auto_select: true,
+      });
+      google.accounts.id.renderButton(document.getElementById('google-btn'), {
+        theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', width: 280,
+      });
+    } else if (retries++ < 50) {
+      setTimeout(init, 100);
+    }
+  };
+  init();
+}
+
+function handleGoogleSignIn(response) {
+  const jwt = decodeJwt(response.credential);
+  const user = { email: jwt.email, name: jwt.name, picture: jwt.picture, ts: Date.now() };
+  localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+  onAuthSuccess(user, true);
+}
+
+function onAuthSuccess(user, freshLogin) {
+  currentUser = user;
+  isAdmin = user.email.endsWith('@' + CONFIG.ADMIN_DOMAIN);
+  document.getElementById('login-gate').classList.add('hidden');
+  document.getElementById('user-email').textContent = user.email;
+  if (isAdmin) document.getElementById('admin-badge').classList.remove('hidden');
+  document.getElementById('loading-state').classList.remove('hidden');
+  loadAndRender();
+}
+
+function handleSignOut() {
+  localStorage.removeItem(AUTH_KEY);
+  try { google.accounts.id.disableAutoSelect(); } catch(e) {}
+  currentUser = null;
+  isAdmin = false;
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('access-denied').classList.add('hidden');
+  document.getElementById('loading-state').classList.add('hidden');
+  showLoginGate();
+}
+
+// ═══════════════════════════════════════════════
+//  DATA LOADING
+// ═══════════════════════════════════════════════
+
+async function loadAndRender() {
+  try {
+    // 1. Discover pods from Apps Script (same as Command Centre)
+    await discoverPods();
+
+    // 2. Fetch client access mapping + all pod data in parallel
+    const [accessMap, podResults] = await Promise.all([
+      fetchClientAccess(),
+      fetchAllPods()
+    ]);
+
+    // 3. Merge pod results
+    allAccounts = [];
+    allCycles = [];
+    for (const result of podResults) {
+      if (!result) continue;
+      allAccounts.push(...result.accounts);
+      allCycles.push(...result.cycles);
+    }
+
+    // Link cycles to accounts
+    for (const acct of allAccounts) {
+      acct.cycles = allCycles.filter(c => c.account === acct.name && c.adAccountId === acct.adAccountId);
+      if (!acct.cycles.length) acct.cycles = allCycles.filter(c => c.account === acct.name);
+    }
+
+    // 4. Access control
+    if (isAdmin) {
+      allowedAccounts = allAccounts.map(a => a.name);
+    } else {
+      const email = currentUser.email.toLowerCase();
+      allowedAccounts = (accessMap[email] || []);
+    }
+
+    if (allowedAccounts.length === 0 && !isAdmin) {
+      document.getElementById('loading-state').classList.add('hidden');
+      document.getElementById('access-denied').classList.remove('hidden');
+      return;
+    }
+
+    // 5. Render
+    document.getElementById('loading-state').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+
+    if (isAdmin || allowedAccounts.length > 1) {
+      showAccountPicker(allowedAccounts);
+    }
+
+    const defaultAccount = allowedAccounts[0];
+    renderDashboard(defaultAccount);
+
+  } catch(err) {
+    console.error('Load error:', err);
+    document.getElementById('loading-state').classList.add('hidden');
+    document.getElementById('dashboard-content').innerHTML = `<div class="glass" style="padding:40px;text-align:center;"><p style="color:#f87171;">Failed to load data</p><p style="color:#64748b;font-size:13px;margin-top:8px;">${err.message}</p></div>`;
+    document.getElementById('app').classList.remove('hidden');
+  }
+}
+
+async function discoverPods() {
+  try {
+    const resp = await fetch(CONFIG.APPS_SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'getPodRegistry' }),
+      redirect: 'follow',
+    });
+    const text = await resp.text();
+    const data = JSON.parse(text);
+    if (data.ok && data.pods) {
+      for (const pod of data.pods) {
+        if (pod.active && pod.name && pod.gid !== undefined) {
+          SHEETS[pod.name] = parseInt(pod.gid);
+        }
+      }
+    }
+  } catch(e) {
+    console.warn('Pod discovery failed, using defaults:', e);
+  }
+}
+
+async function fetchClientAccess() {
+  // Returns { 'email@example.com': ['Account Name 1', 'Account Name 2'] }
+  const map = {};
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Client%20Access`;
+    const resp = await fetch(url);
+    const text = await resp.text();
+    const json = JSON.parse(text.match(/google\.visualization\.Query\.setResponse\((.+)\)/)[1]);
+    const rows = json.table.rows;
+    for (const row of rows) {
+      if (!row.c || !row.c[0] || !row.c[1]) continue;
+      const email = String(row.c[0].v || '').trim().toLowerCase();
+      const account = String(row.c[1].v || '').trim();
+      if (!email || !account) continue;
+      if (!map[email]) map[email] = [];
+      if (!map[email].includes(account)) map[email].push(account);
+    }
+  } catch(e) {
+    console.warn('Client Access tab not found or empty:', e.message);
+  }
+  return map;
+}
+
+async function fetchAllPods() {
+  const entries = Object.entries(SHEETS);
+  return Promise.all(entries.map(([name, gid]) => fetchPodData(name, gid)));
+}
+
+async function fetchPodData(podName, gid) {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${gid}`;
+    const resp = await fetch(url);
+    const text = await resp.text();
+    const json = JSON.parse(text.match(/google\.visualization\.Query\.setResponse\((.+)\)/)[1]);
+    return parseSheetData(json, podName);
+  } catch(e) {
+    console.warn(`Failed to fetch ${podName}:`, e.message);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  SHEET PARSER (simplified from Command Centre)
+// ═══════════════════════════════════════════════
+
+function buildColumnMap(cols) {
+  const map = {};
+  if (!cols) return map;
+  cols.forEach((col, idx) => {
+    const label = (col.label || '').trim();
+    if (label) map[label.toLowerCase()] = idx;
+  });
+  return map;
+}
+
+function colIdx(colMap, ...names) {
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (colMap[key] !== undefined) return colMap[key];
+  }
+  const keys = Object.keys(colMap);
+  for (const name of names) {
+    const lower = name.toLowerCase();
+    const found = keys.find(k => k.includes(lower) || lower.includes(k));
+    if (found !== undefined) return colMap[found];
+  }
+  return -1;
+}
+
+function parseSheetData(data, podName) {
+  const rows = data.table.rows;
+  const accounts = [];
+  const cycles = [];
+  let currentAccountName = '';
+  let currentAdAccountId = '';
+  let currentMgr = '';
+
+  const colMap = buildColumnMap(data.table.cols);
+  const COL = {
+    account:       colIdx(colMap, 'account', 'account name', 'client'),
+    cycle:         colIdx(colMap, 'cycle', 'cycle label'),
+    adAccountId:   colIdx(colMap, 'ad account id', 'ad account', 'ad acct id'),
+    cycleStart:    colIdx(colMap, 'cycle start date', 'cycle start', 'start date'),
+    cycleEnd:      colIdx(colMap, 'cycle end date', 'cycle end', 'end date'),
+    bookedGoal:    colIdx(colMap, 'booked appointment goal', 'booked appt goal', 'appointment goal'),
+    totalLeads:    colIdx(colMap, 'total leads', 'leads'),
+    osaPct:        colIdx(colMap, 'osa', 'osa %', 'osa rate'),
+    bookedAppts:   colIdx(colMap, 'booked appointments', 'booked appts', 'booked'),
+    estBooked:     colIdx(colMap, 'est. booked', 'est booked', 'estimated booked'),
+    cpa:           colIdx(colMap, 'cpa', 'cpl', 'cost per lead'),
+    dailyBudget:   colIdx(colMap, 'daily budget'),
+    monthlyBudget: colIdx(colMap, 'monthly budget'),
+    amountSpent:   colIdx(colMap, 'amount spent', 'spent'),
+    linkCTR:       colIdx(colMap, 'link ctr', 'ctr'),
+    linkCPC:       colIdx(colMap, 'link cpc', 'cpc'),
+    cpm:           colIdx(colMap, 'cpm'),
+    frequency:     colIdx(colMap, 'frequency', 'freq'),
+    surveyPct:     colIdx(colMap, 'survey', 'survey %'),
+    manager:       colIdx(colMap, 'account manager', 'manager'),
+  };
+
+  const iA = COL.account >= 0 ? COL.account : 0;
+  const iC = COL.cycle >= 0 ? COL.cycle : 1;
+
+  function getStr(row, idx) { return (idx >= 0 && row.c && row.c[idx]) ? String(row.c[idx].v || '').trim() : ''; }
+  function getNum(row, idx) { if (idx < 0 || !row.c || !row.c[idx]) return null; const v = row.c[idx].v; return (v !== null && v !== undefined) ? Number(v) || 0 : null; }
+  function getDate(row, idx) {
+    if (idx < 0 || !row.c || !row.c[idx]) return null;
+    const v = row.c[idx].v;
+    if (!v) return null;
+    if (typeof v === 'string' && v.includes('Date(')) {
+      const m = v.match(/Date\((\d+),(\d+),(\d+)/);
+      if (m) return `${m[1]}-${String(Number(m[2])+1).padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    }
+    const cell = row.c[idx];
+    if (cell.f) { const d = new Date(cell.f); if (!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); return cell.f; }
+    if (typeof v === 'string') { const d = new Date(v); if (!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    return null;
+  }
+  function normPct(v) { return (v !== null && v > 0 && v <= 1) ? v * 100 : v; }
+
+  // Pre-scan: find account names (rows with a cycle label)
+  const knownAccountNames = new Set();
+  const knownSubSections = ['kpi','roof ignite','roofignite','roofers ignite','hvac ignite','pending','expansion','active','inactive','cign ignite','solar ignite','contractorsignite','contractors ignite','paused','pause','winter'];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r.c) continue;
+    const a = r.c[iA] ? String(r.c[iA].v || '').trim() : '';
+    const b = r.c[iC] ? String(r.c[iC].v || '').trim() : '';
+    if (a && b && b.toLowerCase().startsWith('cycle')) knownAccountNames.add(a);
+  }
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i]; if (!row.c) continue;
+    const cellA = row.c[iA] ? String(row.c[iA].v || '').trim() : '';
+    const cellB = row.c[iC] ? String(row.c[iC].v || '').trim() : '';
+    if (!cellA && !cellB) continue;
+
+    // Section header (manager, sub-section)
+    if (cellA && !cellB && !knownAccountNames.has(cellA)) {
+      if (!knownSubSections.includes(cellA.toLowerCase())) currentMgr = cellA;
+      continue;
+    }
+
+    // Account header
+    if (cellA && knownAccountNames.has(cellA) && !(cellB.toLowerCase().startsWith('cycle'))) {
+      currentAccountName = cellA;
+      const adIdx = COL.adAccountId >= 0 ? COL.adAccountId : 2;
+      const adCell = row.c[adIdx];
+      currentAdAccountId = adCell ? String(adCell.f || adCell.v || '').replace(/[\s,]/g,'') : '';
+      const mgr = getStr(row, COL.manager);
+      if (mgr) currentMgr = mgr;
+      if (!accounts.find(a => a.name === currentAccountName)) {
+        accounts.push({ name: currentAccountName, adAccountId: currentAdAccountId, pod: podName, manager: currentMgr || 'Unassigned', cycles: [] });
+      }
+      continue;
+    }
+
+    // Cycle row
+    if (cellB && cellB.toLowerCase().startsWith('cycle')) {
+      if (cellA && cellA !== currentAccountName) currentAccountName = cellA;
+      const mgr = getStr(row, COL.manager);
+      if (mgr) currentMgr = mgr;
+
+      const cycleData = {
+        account: currentAccountName,
+        adAccountId: currentAdAccountId,
+        pod: podName,
+        cycle: cellB,
+        cycleStartDate: getDate(row, COL.cycleStart),
+        cycleEndDate: getDate(row, COL.cycleEnd),
+        bookedGoal: getNum(row, COL.bookedGoal),
+        totalLeads: getNum(row, COL.totalLeads),
+        osaPct: normPct(getNum(row, COL.osaPct)),
+        bookedAppts: getNum(row, COL.bookedAppts),
+        estBookedAppts: getNum(row, COL.estBooked),
+        cpa: getNum(row, COL.cpa),
+        dailyBudget: getNum(row, COL.dailyBudget),
+        monthlyBudget: getNum(row, COL.monthlyBudget),
+        amountSpent: getNum(row, COL.amountSpent),
+        linkCTR: getNum(row, COL.linkCTR),
+        linkCPC: getNum(row, COL.linkCPC),
+        cpm: getNum(row, COL.cpm),
+        frequency: getNum(row, COL.frequency),
+        surveyPct: normPct(getNum(row, COL.surveyPct)),
+        manager: mgr || currentMgr,
+      };
+      cycleData.isExtended = isExtendedCycle(cycleData);
+      cycles.push(cycleData);
+
+      let parent = accounts.find(a => a.name === currentAccountName);
+      if (parent) parent.cycles.push(cycleData);
+    }
+  }
+  return { accounts, cycles };
+}
+
+// ═══════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════
+
+function parseLocalDate(s) {
+  if (!s) return null;
+  const p = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (p) return new Date(Number(p[1]), Number(p[2])-1, Number(p[3]));
+  const d = new Date(s + 'T00:00:00');
+  return isNaN(d) ? null : d;
+}
+
+function isExtendedCycle(cycle) {
+  if (!cycle || !cycle.cycleStartDate || !cycle.cycleEndDate) return false;
+  const start = parseLocalDate(cycle.cycleStartDate);
+  const end = parseLocalDate(cycle.cycleEndDate);
+  if (!start || !end) return false;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.round((today - start) / 86400000) > 28 && today <= end;
+}
+
+function getActiveCycle(acct) {
+  if (!acct || !acct.cycles || !acct.cycles.length) return null;
+  const today = getTodayStr();
+  const active = acct.cycles.find(c => c.cycleStartDate && c.cycleEndDate && c.cycleStartDate <= today && c.cycleEndDate >= today);
+  return active || acct.cycles[acct.cycles.length - 1];
+}
+
+function getTodayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+function fmt(v) { return v !== null && v !== undefined ? Math.round(v).toLocaleString() : '--'; }
+function fmtDollar(v, dec) { return v !== null && v !== undefined ? '$' + Number(v).toFixed(dec || 0).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '--'; }
+function fmtPct(v) { return v !== null && v !== undefined ? v.toFixed(1) + '%' : '--'; }
+function fmtDate(s) {
+  if (!s) return '--';
+  const d = parseLocalDate(s);
+  return d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : s;
+}
+function fmtDateShort(s) {
+  if (!s) return '--';
+  const d = parseLocalDate(s);
+  return d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : s;
+}
+
+function isOnTrack(c) {
+  if (!c || !c.cycleStartDate || !c.cycleEndDate || !c.bookedGoal || c.bookedGoal <= 0) return null;
+  const start = parseLocalDate(c.cycleStartDate);
+  const end = parseLocalDate(c.cycleEndDate);
+  if (!start || !end) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const totalMs = Math.max(1, end - start);
+  const elapsedMs = Math.max(0, Math.min(today - start, totalMs));
+  const frac = elapsedMs / totalMs;
+  const expected = c.bookedGoal * frac;
+  const est = c.estBookedAppts || c.bookedAppts || 0;
+  return est >= expected * 0.85;
+}
+
+// ═══════════════════════════════════════════════
+//  ACCOUNT PICKER
+// ═══════════════════════════════════════════════
+
+function showAccountPicker(accountNames) {
+  const picker = document.getElementById('account-picker');
+  const sorted = [...new Set(accountNames)].sort();
+  picker.innerHTML = sorted.map(n => `<option value="${n}">${n}</option>`).join('');
+  picker.classList.remove('hidden');
+}
+
+function onAccountChange(name) {
+  renderDashboard(name);
+}
+
+// ═══════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════
+
+function renderDashboard(accountName) {
+  const el = document.getElementById('dashboard-content');
+  const acct = allAccounts.find(a => a.name === accountName);
+  if (!acct) {
+    el.innerHTML = `<div class="glass" style="padding:40px;text-align:center;color:#64748b;">Account "${accountName}" not found.</div>`;
+    return;
+  }
+
+  const active = getActiveCycle(acct);
+  const pastCycles = (acct.cycles || []).slice().reverse();
+  const today = getTodayStr();
+  const hasActive = active && active.cycleStartDate <= today && active.cycleEndDate >= today;
+  const track = hasActive ? isOnTrack(active) : null;
+
+  document.getElementById('header-sub').textContent = accountName;
+
+  // ── Current Cycle ──
+  let currentHtml = '';
+  if (active) {
+    const trackClass = track === true ? 'track-on' : track === false ? 'track-off' : 'track-na';
+    const trackLabel = track === true ? '● On Track' : track === false ? '▲ Off Track' : '-- Insufficient Data';
+    const daysIn = active.cycleStartDate ? Math.max(0, Math.round((new Date() - parseLocalDate(active.cycleStartDate)) / 86400000)) : 0;
+    const totalDays = (active.cycleStartDate && active.cycleEndDate) ? Math.round((parseLocalDate(active.cycleEndDate) - parseLocalDate(active.cycleStartDate)) / 86400000) : 0;
+
+    currentHtml = `
+      <div class="glass" style="padding:24px;margin-bottom:24px;">
+        <div class="cycle-bar">
+          <span class="badge badge-blue">${active.cycle}</span>
+          <span style="color:#94a3b8;font-size:13px;">${fmtDateShort(active.cycleStartDate)} - ${fmtDateShort(active.cycleEndDate)}</span>
+          ${active.isExtended ? '<span class="badge badge-purple">EXTENDED</span>' : ''}
+          ${hasActive ? `<span style="color:#64748b;font-size:12px;">Day ${daysIn} of ${totalDays}</span>` : '<span class="badge badge-gray">Cycle Ended</span>'}
+          <span class="track-pill ${trackClass}">${trackLabel}</span>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Leads</div>
+            <div class="kpi-value">${fmt(active.totalLeads)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Booked</div>
+            <div class="kpi-value" style="color:#34d399;">${fmt(active.bookedAppts)}</div>
+            <div class="kpi-sub">Goal: ${fmt(active.bookedGoal)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Est. Booked</div>
+            <div class="kpi-value">${fmt(active.estBookedAppts)}</div>
+            <div class="kpi-sub">of ${fmt(active.bookedGoal)} goal</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Spent</div>
+            <div class="kpi-value">${fmtDollar(active.amountSpent)}</div>
+            <div class="kpi-sub">Budget: ${fmtDollar(active.monthlyBudget)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Cost Per Lead</div>
+            <div class="kpi-value">${fmtDollar(active.cpa, 2)}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Link CTR</div>
+            <div class="kpi-value">${active.linkCTR ? fmtPct(active.linkCTR) : '--'}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">OSA Rate</div>
+            <div class="kpi-value">${active.osaPct ? fmtPct(active.osaPct) : '--'}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Survey Rate</div>
+            <div class="kpi-value">${active.surveyPct ? fmtPct(active.surveyPct) : '--'}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  } else {
+    currentHtml = `<div class="glass" style="padding:40px;text-align:center;margin-bottom:24px;"><p style="color:#64748b;">No active cycle found.</p></div>`;
+  }
+
+  // ── Cycle History ──
+  let historyHtml = '';
+  if (pastCycles.length > 0) {
+    const historyRows = pastCycles.map(c => `
+      <tr>
+        <td>${c.cycle}${c.isExtended ? ' <span class="badge badge-purple" style="font-size:9px;">EXT</span>' : ''}</td>
+        <td>${fmtDateShort(c.cycleStartDate)} - ${fmtDateShort(c.cycleEndDate)}</td>
+        <td class="num">${fmt(c.totalLeads)}</td>
+        <td class="num" style="color:#34d399;">${fmt(c.bookedAppts)}</td>
+        <td class="num">${fmt(c.bookedGoal)}</td>
+        <td class="num">${fmtDollar(c.amountSpent)}</td>
+        <td class="num">${fmtDollar(c.cpa, 2)}</td>
+        <td class="num">${c.linkCTR ? fmtPct(c.linkCTR) : '--'}</td>
+      </tr>
+    `).join('');
+
+    historyHtml = `
+      <div class="glass" style="padding:24px;">
+        <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:16px;">Cycle History</h3>
+        <div style="overflow-x:auto;">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Cycle</th>
+                <th>Dates</th>
+                <th class="num">Leads</th>
+                <th class="num">Booked</th>
+                <th class="num">Goal</th>
+                <th class="num">Spent</th>
+                <th class="num">CPL</th>
+                <th class="num">CTR</th>
+              </tr>
+            </thead>
+            <tbody>${historyRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  el.innerHTML = currentHtml + historyHtml;
+}
+
+// ═══════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => checkExistingSession());

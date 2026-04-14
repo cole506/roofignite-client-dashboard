@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>RoofIgnite - Client Portal</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="config.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Login Gate -->
+<div id="login-gate" class="login-gate">
+  <div class="login-box">
+    <div class="login-logo">RoofIgnite</div>
+    <div class="login-sub">Client Portal — Sign in to view your campaign performance</div>
+    <div id="g_id_onload" data-auto_prompt="false"></div>
+    <div id="google-btn" style="display:inline-block;"></div>
+  </div>
+</div>
+
+<!-- Access Denied -->
+<div id="access-denied" class="hidden">
+  <div class="denied-box">
+    <div class="denied-icon">🔒</div>
+    <div class="denied-title">Access Denied</div>
+    <div class="denied-msg">Your email is not associated with any account.<br>Contact your account manager to get access.</div>
+    <button onclick="handleSignOut()" class="btn-signout" style="margin-top:24px;padding:10px 24px;font-size:13px;">Sign out</button>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="loading-state" class="hidden">
+  <div class="loading">
+    <div class="spinner"></div>
+    <p>Loading your dashboard...</p>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" class="hidden fade-in">
+  <div class="container">
+    <!-- Header -->
+    <div class="glass header">
+      <div>
+        <div class="header-title">RoofIgnite</div>
+        <div class="header-sub" id="header-sub">Client Portal</div>
+      </div>
+      <div class="header-right">
+        <select id="account-picker" class="account-picker hidden" onchange="onAccountChange(this.value)"></select>
+        <span id="admin-badge" class="admin-badge hidden">ADMIN</span>
+        <span class="user-email" id="user-email"></span>
+        <button onclick="handleSignOut()" class="btn-signout">Sign out</button>
+      </div>
+    </div>
+
+    <!-- Dashboard content -->
+    <div id="dashboard-content"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

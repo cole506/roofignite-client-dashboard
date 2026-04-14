@@ -453,15 +453,12 @@ function renderDashboard(accountName) {
   const pastCycles = (acct.cycles || []).slice().reverse();
   const today = getTodayStr();
   const hasActive = active && active.cycleStartDate <= today && active.cycleEndDate >= today;
-  const track = hasActive ? isOnTrack(active) : null;
 
   document.getElementById('header-sub').textContent = accountName;
 
   // ── Current Cycle ──
   let currentHtml = '';
   if (active) {
-    const trackClass = track === true ? 'track-on' : track === false ? 'track-off' : 'track-na';
-    const trackLabel = track === true ? '● On Track' : track === false ? '▲ Off Track' : '-- Insufficient Data';
     const daysIn = active.cycleStartDate ? Math.max(0, Math.round((new Date() - parseLocalDate(active.cycleStartDate)) / 86400000)) : 0;
     const totalDays = (active.cycleStartDate && active.cycleEndDate) ? Math.round((parseLocalDate(active.cycleEndDate) - parseLocalDate(active.cycleStartDate)) / 86400000) : 0;
 
@@ -472,7 +469,6 @@ function renderDashboard(accountName) {
           <span style="color:#94a3b8;font-size:13px;">${fmtDateShort(active.cycleStartDate)} - ${fmtDateShort(active.cycleEndDate)}</span>
           ${active.isExtended ? '<span class="badge badge-purple">EXTENDED</span>' : ''}
           ${hasActive ? `<span style="color:#64748b;font-size:12px;">Day ${daysIn} of ${totalDays}</span>` : '<span class="badge badge-gray">Cycle Ended</span>'}
-          <span class="track-pill ${trackClass}">${trackLabel}</span>
         </div>
 
         <div class="kpi-grid">
@@ -481,17 +477,18 @@ function renderDashboard(accountName) {
             <div class="kpi-value">${fmt(active.totalLeads)}</div>
           </div>
           <div class="kpi-card">
-            <div class="kpi-label">Booked</div>
+            <div class="kpi-label">Booked Appointments</div>
             <div class="kpi-value" style="color:#34d399;">${fmt(active.bookedAppts)}</div>
             <div class="kpi-sub">Goal: ${fmt(active.bookedGoal)}</div>
           </div>
           <div class="kpi-card">
-            <div class="kpi-label">Est. Booked</div>
+            <div class="kpi-label">Projected Bookings</div>
             <div class="kpi-value">${fmt(active.estBookedAppts)}</div>
             <div class="kpi-sub">of ${fmt(active.bookedGoal)} goal</div>
+            <div class="kpi-disclaimer" title="Projections are based on current pacing and typically trend upward as leads continue to convert throughout the cycle. Late-stage bookings, callback conversions, and follow-up appointments often close in the final weeks.">* Projection only &mdash; hover for details</div>
           </div>
           <div class="kpi-card">
-            <div class="kpi-label">Spent</div>
+            <div class="kpi-label">Ad Spend</div>
             <div class="kpi-value">${fmtDollar(active.amountSpent)}</div>
             <div class="kpi-sub">Budget: ${fmtDollar(active.monthlyBudget)}</div>
           </div>
@@ -500,16 +497,8 @@ function renderDashboard(accountName) {
             <div class="kpi-value">${fmtDollar(active.cpa, 2)}</div>
           </div>
           <div class="kpi-card">
-            <div class="kpi-label">Link CTR</div>
-            <div class="kpi-value">${active.linkCTR ? fmtPct(active.linkCTR) : '--'}</div>
-          </div>
-          <div class="kpi-card">
             <div class="kpi-label">OSA Rate</div>
             <div class="kpi-value">${active.osaPct ? fmtPct(active.osaPct) : '--'}</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Survey Rate</div>
-            <div class="kpi-value">${active.surveyPct ? fmtPct(active.surveyPct) : '--'}</div>
           </div>
         </div>
       </div>
@@ -530,7 +519,6 @@ function renderDashboard(accountName) {
         <td class="num">${fmt(c.bookedGoal)}</td>
         <td class="num">${fmtDollar(c.amountSpent)}</td>
         <td class="num">${fmtDollar(c.cpa, 2)}</td>
-        <td class="num">${c.linkCTR ? fmtPct(c.linkCTR) : '--'}</td>
       </tr>
     `).join('');
 
@@ -548,7 +536,6 @@ function renderDashboard(accountName) {
                 <th class="num">Goal</th>
                 <th class="num">Spent</th>
                 <th class="num">CPL</th>
-                <th class="num">CTR</th>
               </tr>
             </thead>
             <tbody>${historyRows}</tbody>

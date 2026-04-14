@@ -63,6 +63,22 @@
   </div>
 </div>
 
+<!-- Invite Modal -->
+<div id="invite-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeInviteModal()">
+  <div class="modal-box">
+    <div class="modal-title">Invite Someone</div>
+    <div class="modal-sub" id="invite-modal-sub">They'll receive an email with a link to sign in.</div>
+    <input type="email" id="invite-email" class="modal-input" placeholder="email@example.com" onkeydown="if(event.key==='Enter')submitInvite()">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeInviteModal()">Cancel</button>
+      <button class="btn-primary" id="invite-submit-btn" onclick="submitInvite()">Send Invite</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container" class="toast-container"></div>
+
 <script src="app.js"></script>
 </body>
 </html>

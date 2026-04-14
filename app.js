@@ -576,11 +576,14 @@ function renderDashboard(accountName) {
 
     currentHtml = `
       <div class="glass" style="padding:24px;margin-bottom:24px;">
-        <div class="cycle-bar">
-          <span class="badge badge-blue">${active.cycle}</span>
-          <span style="color:#94a3b8;font-size:13px;">${fmtDateShort(active.cycleStartDate)} - ${fmtDateShort(active.cycleEndDate)}</span>
-          ${active.isExtended ? '<span class="badge badge-purple">EXTENDED</span>' : ''}
-          ${hasActive ? `<span style="color:#64748b;font-size:12px;">Day ${daysIn} of ${totalDays}</span>` : '<span class="badge badge-gray">Cycle Ended</span>'}
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+          <div class="cycle-bar" style="margin-bottom:0;">
+            <span class="badge badge-blue">${active.cycle}</span>
+            <span style="color:#94a3b8;font-size:13px;">${fmtDateShort(active.cycleStartDate)} - ${fmtDateShort(active.cycleEndDate)}</span>
+            ${active.isExtended ? '<span class="badge badge-purple">EXTENDED</span>' : ''}
+            ${hasActive ? `<span style="color:#64748b;font-size:12px;">Day ${daysIn} of ${totalDays}</span>` : '<span class="badge badge-gray">Cycle Ended</span>'}
+          </div>
+          <button class="btn-invite" onclick="openInviteModal('${accountName.replace(/'/g,"\\'")}')">+ Invite</button>
         </div>
 
         <div class="kpi-grid">
@@ -660,7 +663,126 @@ function renderDashboard(accountName) {
     `;
   }
 
-  el.innerHTML = currentHtml + leadHtml + historyHtml;
+  // ── Access Management (admin only) ──
+  let accessHtml = '';
+  if (isAdmin) {
+    accessHtml = `
+      <div class="glass" style="padding:24px;margin-top:24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <h3 style="color:#fff;font-size:16px;font-weight:700;">Manage Access</h3>
+          <button class="btn-invite" onclick="openInviteModal('${accountName.replace(/'/g,"\\'")}')">+ Invite</button>
+        </div>
+        <div id="access-list"><p style="color:#64748b;font-size:13px;">Loading...</p></div>
+      </div>
+    `;
+  }
+
+  el.innerHTML = currentHtml + leadHtml + historyHtml + accessHtml;
+
+  // Load access list after DOM is rendered
+  if (isAdmin) loadAccessList(accountName);
+}
+
+// ═══════════════════════════════════════════════
+//  APPS SCRIPT COMMUNICATION
+// ═══════════════════════════════════════════════
+
+async function writeToSheet(action, data) {
+  const resp = await fetch(CONFIG.APPS_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...data }),
+    redirect: 'follow',
+  });
+  const text = await resp.text();
+  try { return JSON.parse(text); } catch { return { ok: false, error: text }; }
+}
+
+// ═══════════════════════════════════════════════
+//  TOAST NOTIFICATIONS
+// ═══════════════════════════════════════════════
+
+function showToast(msg, type) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + (type || 'success');
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 4000);
+}
+
+// ═══════════════════════════════════════════════
+//  INVITE SYSTEM
+// ═══════════════════════════════════════════════
+
+function openInviteModal(accountName) {
+  document.getElementById('invite-modal-sub').textContent = 'Invite someone to view ' + accountName + "'s dashboard.";
+  document.getElementById('invite-email').value = '';
+  document.getElementById('invite-submit-btn').disabled = false;
+  document.getElementById('invite-submit-btn').textContent = 'Send Invite';
+  document.getElementById('invite-modal').classList.remove('hidden');
+  document.getElementById('invite-modal').dataset.account = accountName;
+  setTimeout(() => document.getElementById('invite-email').focus(), 100);
+}
+
+function closeInviteModal() {
+  document.getElementById('invite-modal').classList.add('hidden');
+}
+
+async function submitInvite() {
+  const email = document.getElementById('invite-email').value.trim().toLowerCase();
+  const accountName = document.getElementById('invite-modal').dataset.account;
+  if (!email || !email.includes('@')) { showToast('Enter a valid email address', 'error'); return; }
+
+  const btn = document.getElementById('invite-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  const result = await writeToSheet('sendClientInvite', {
+    email,
+    accountName,
+    invitedBy: currentUser.email,
+  });
+
+  if (result.ok) {
+    showToast('Invite sent to ' + email, 'success');
+    closeInviteModal();
+    // Refresh access list if admin
+    if (isAdmin) loadAccessList(accountName);
+  } else {
+    showToast(result.error || 'Failed to send invite', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Send Invite';
+  }
+}
+
+async function loadAccessList(accountName) {
+  const result = await writeToSheet('getClientAccessList', { accountName });
+  if (!result.ok) return;
+  const container = document.getElementById('access-list');
+  if (!container) return;
+  if (result.emails.length === 0) {
+    container.innerHTML = '<p style="color:#64748b;font-size:13px;">No one has been invited yet.</p>';
+    return;
+  }
+  container.innerHTML = result.emails.map(e => `
+    <div class="access-row">
+      <div>
+        <div class="access-email">${e.email}</div>
+        <div class="access-meta">Invited by ${e.invitedBy || 'unknown'} ${e.date ? '· ' + fmtDateShort(e.date) : ''}</div>
+      </div>
+      <button class="btn-remove" onclick="removeAccess('${e.email}','${accountName.replace(/'/g,"\\'")}')">Remove</button>
+    </div>
+  `).join('');
+}
+
+async function removeAccess(email, accountName) {
+  const result = await writeToSheet('removeClientAccess', { email, accountName });
+  if (result.ok) {
+    showToast('Access removed for ' + email, 'success');
+    loadAccessList(accountName);
+  } else {
+    showToast(result.error || 'Failed to remove access', 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════

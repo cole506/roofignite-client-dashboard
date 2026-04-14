@@ -744,7 +744,11 @@ async function submitInvite() {
   });
 
   if (result.ok) {
-    showToast('Invite sent to ' + email, 'success');
+    if (result.emailError) {
+      showToast('Access granted but email failed: ' + result.emailError, 'error');
+    } else {
+      showToast('Invite sent to ' + email, 'success');
+    }
     closeInviteModal();
     // Refresh access list if admin
     if (isAdmin) loadAccessList(accountName);

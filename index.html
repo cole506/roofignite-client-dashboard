@@ -22,8 +22,8 @@
 
     <!-- Login Form -->
     <div id="login-form">
-      <input type="email" id="auth-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;">
-      <input type="password" id="auth-password" class="modal-input" placeholder="Password" style="margin-bottom:6px;">
+      <input type="email" id="auth-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;" autocomplete="email" inputmode="email">
+      <input type="password" id="auth-password" class="modal-input" placeholder="Password" style="margin-bottom:6px;" autocomplete="current-password">
       <div id="auth-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
       <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleLogin()">Sign In</button>
       <p style="color:#64748b;font-size:12px;margin-top:14px;">
@@ -37,9 +37,9 @@
     <!-- Signup Form (shown via invite link) -->
     <div id="signup-form" class="hidden">
       <p style="color:#94a3b8;font-size:13px;margin-bottom:16px;" id="signup-msg">Create your account</p>
-      <input type="email" id="signup-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;">
-      <input type="password" id="signup-password" class="modal-input" placeholder="Choose a password (6+ characters)" style="margin-bottom:6px;">
-      <input type="password" id="signup-confirm" class="modal-input" placeholder="Confirm password" style="margin-bottom:6px;">
+      <input type="email" id="signup-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;" autocomplete="email" inputmode="email">
+      <input type="password" id="signup-password" class="modal-input" placeholder="Choose a password (6+ characters)" style="margin-bottom:6px;" autocomplete="new-password">
+      <input type="password" id="signup-confirm" class="modal-input" placeholder="Confirm password" style="margin-bottom:6px;" autocomplete="new-password">
       <div id="signup-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
       <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleSignup()">Create Account</button>
       <p style="color:#64748b;font-size:12px;margin-top:14px;">
@@ -50,7 +50,7 @@
     <!-- Reset Form -->
     <div id="reset-form" class="hidden">
       <p style="color:#94a3b8;font-size:13px;margin-bottom:16px;">Enter your email to reset your password</p>
-      <input type="email" id="reset-email" class="modal-input" placeholder="Email" style="margin-bottom:6px;">
+      <input type="email" id="reset-email" class="modal-input" placeholder="Email" style="margin-bottom:6px;" autocomplete="email" inputmode="email">
       <div id="reset-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
       <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleReset()">Send Reset Email</button>
       <p style="color:#64748b;font-size:12px;margin-top:14px;">

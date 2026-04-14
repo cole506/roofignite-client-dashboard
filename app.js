@@ -1,6 +1,8 @@
 // ═══════════════════════════════════════════════
-// RoofIgnite Client Portal
+// RoofIgnite Client Portal (IIFE — no globals exposed)
 // ═══════════════════════════════════════════════
+(function() {
+'use strict';
 
 const SHEET_ID = CONFIG.SHEET_ID;
 const SHEETS = CONFIG.SHEETS;
@@ -189,6 +191,19 @@ async function loadAndRender() {
       document.getElementById('loading-state').classList.add('hidden');
       document.getElementById('access-denied').classList.remove('hidden');
       return;
+    }
+
+    // 4b. Filter data to only what user can see (security: even console inspection shows only their data)
+    if (!isAdmin) {
+      const allowed = new Set(allowedAccounts.map(n => n.toLowerCase()));
+      allAccounts = allAccounts.filter(a => allowed.has(a.name.toLowerCase()));
+      allCycles = allCycles.filter(c => allowed.has(c.account.toLowerCase()));
+      allLeads = allLeads.filter(l => {
+        for (const name of allowedAccounts) {
+          if (l.subAccount.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(l.subAccount.toLowerCase())) return true;
+        }
+        return false;
+      });
     }
 
     // 5. Render
@@ -615,6 +630,11 @@ function onAccountChange(name) {
 // ═══════════════════════════════════════════════
 
 function renderDashboard(accountName) {
+  // Access control: verify user can view this account
+  if (!isAdmin && !allowedAccounts.includes(accountName)) {
+    document.getElementById('dashboard-content').innerHTML = '<div class="glass" style="padding:40px;text-align:center;color:#f87171;">Access denied.</div>';
+    return;
+  }
   const el = document.getElementById('dashboard-content');
   const acct = allAccounts.find(a => a.name === accountName);
   if (!acct) {
@@ -696,8 +716,8 @@ function renderDashboard(accountName) {
         <td class="num">${fmt(c.totalLeads)}</td>
         <td class="num" style="color:#34d399;">${fmt(c.bookedAppts)}</td>
         <td class="num">${fmt(c.bookedGoal)}</td>
-        <td class="num">${fmtDollar(c.amountSpent)}</td>
-        <td class="num">${fmtDollar(c.cpa, 2)}</td>
+        <td class="num mobile-hide">${fmtDollar(c.amountSpent)}</td>
+        <td class="num mobile-hide">${fmtDollar(c.cpa, 2)}</td>
       </tr>
     `).join('');
 
@@ -713,8 +733,8 @@ function renderDashboard(accountName) {
                 <th class="num">Leads</th>
                 <th class="num">Booked</th>
                 <th class="num">Goal</th>
-                <th class="num">Spent</th>
-                <th class="num">CPL</th>
+                <th class="num mobile-hide">Spent</th>
+                <th class="num mobile-hide">CPL</th>
               </tr>
             </thead>
             <tbody>${historyRows}</tbody>
@@ -935,4 +955,23 @@ function setLeadFilter(filter) {
 //  INIT
 // ═══════════════════════════════════════════════
 
+// Expose only necessary functions for HTML onclick handlers
+window.handleLogin = handleLogin;
+window.handleSignup = handleSignup;
+window.handleReset = handleReset;
+window.handleSignOut = handleSignOut;
+window.showLoginForm = showLoginForm;
+window.showSignupForm = showSignupForm;
+window.showResetForm = showResetForm;
+window.onAccountChange = function(name) {
+  if (!isAdmin && !allowedAccounts.includes(name)) return;
+  renderDashboard(name);
+};
+window.openInviteModal = openInviteModal;
+window.closeInviteModal = closeInviteModal;
+window.submitInvite = submitInvite;
+window.removeAccess = removeAccess;
+window.setLeadFilter = setLeadFilter;
+
 document.addEventListener('DOMContentLoaded', () => initAuth());
+})();

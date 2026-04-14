@@ -59,10 +59,10 @@ a { color: inherit; text-decoration: none; }
 .mobile-hide { display: none; }
 
 /* ═══ Lead Statuses ═══ */
-.lead-booked { color: #34d399; }
-.lead-client { color: #fbbf24; }
-.lead-cancelled { color: #f87171; }
-.lead-open { color: #e2e8f0; }
+td.lead-booked { color: #34d399; }
+td.lead-client { color: #fbbf24; }
+td.lead-cancelled { color: #f87171; }
+td.lead-open { color: #e2e8f0; }
 
 /* ═══ Filter Badges ═══ */
 .lead-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }

@@ -7,19 +7,56 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="config.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- Login Gate -->
-<div id="login-gate" class="login-gate">
+<!-- Auth Gate -->
+<div id="auth-gate" class="login-gate">
   <div class="login-box">
     <div class="login-logo">RoofIgnite</div>
-    <div class="login-sub">Client Portal — Sign in to view your campaign performance</div>
-    <div id="g_id_onload" data-auto_prompt="false"></div>
-    <div id="google-btn" style="display:inline-block;"></div>
+    <div class="login-sub">Client Portal</div>
+
+    <!-- Login Form -->
+    <div id="login-form">
+      <input type="email" id="auth-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;">
+      <input type="password" id="auth-password" class="modal-input" placeholder="Password" style="margin-bottom:6px;">
+      <div id="auth-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
+      <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleLogin()">Sign In</button>
+      <p style="color:#64748b;font-size:12px;margin-top:14px;">
+        <span style="cursor:pointer;color:#d4a843;" onclick="showResetForm()">Forgot password?</span>
+      </p>
+      <p id="signup-prompt" style="color:#64748b;font-size:12px;margin-top:8px;" class="hidden">
+        Don't have an account? <span style="cursor:pointer;color:#d4a843;" onclick="showSignupForm()">Create one</span>
+      </p>
+    </div>
+
+    <!-- Signup Form (shown via invite link) -->
+    <div id="signup-form" class="hidden">
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:16px;" id="signup-msg">Create your account</p>
+      <input type="email" id="signup-email" class="modal-input" placeholder="Email" style="margin-bottom:10px;" readonly>
+      <input type="password" id="signup-password" class="modal-input" placeholder="Choose a password (6+ characters)" style="margin-bottom:6px;">
+      <input type="password" id="signup-confirm" class="modal-input" placeholder="Confirm password" style="margin-bottom:6px;">
+      <div id="signup-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
+      <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleSignup()">Create Account</button>
+      <p style="color:#64748b;font-size:12px;margin-top:14px;">
+        Already have an account? <span style="cursor:pointer;color:#d4a843;" onclick="showLoginForm()">Sign in</span>
+      </p>
+    </div>
+
+    <!-- Reset Form -->
+    <div id="reset-form" class="hidden">
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:16px;">Enter your email to reset your password</p>
+      <input type="email" id="reset-email" class="modal-input" placeholder="Email" style="margin-bottom:6px;">
+      <div id="reset-error" style="color:#f87171;font-size:12px;min-height:20px;margin-bottom:10px;"></div>
+      <button class="btn-primary" style="width:100%;padding:12px;" onclick="handleReset()">Send Reset Email</button>
+      <p style="color:#64748b;font-size:12px;margin-top:14px;">
+        <span style="cursor:pointer;color:#d4a843;" onclick="showLoginForm()">Back to sign in</span>
+      </p>
+    </div>
   </div>
 </div>
 
@@ -44,7 +81,6 @@
 <!-- Main App -->
 <div id="app" class="hidden fade-in">
   <div class="container">
-    <!-- Header -->
     <div class="glass header">
       <div>
         <div class="header-title">RoofIgnite</div>
@@ -57,8 +93,6 @@
         <button onclick="handleSignOut()" class="btn-signout">Sign out</button>
       </div>
     </div>
-
-    <!-- Dashboard content -->
     <div id="dashboard-content"></div>
   </div>
 </div>
@@ -67,7 +101,7 @@
 <div id="invite-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeInviteModal()">
   <div class="modal-box">
     <div class="modal-title">Invite Someone</div>
-    <div class="modal-sub" id="invite-modal-sub">They'll receive an email with a link to sign in.</div>
+    <div class="modal-sub" id="invite-modal-sub">They'll receive an email with a link to create their account.</div>
     <input type="email" id="invite-email" class="modal-input" placeholder="email@example.com" onkeydown="if(event.key==='Enter')submitInvite()">
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeInviteModal()">Cancel</button>

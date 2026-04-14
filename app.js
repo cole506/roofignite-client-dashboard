@@ -4,12 +4,10 @@
 
 const SHEET_ID = CONFIG.SHEET_ID;
 const SHEETS = CONFIG.SHEETS;
-const AUTH_KEY = 'ri_client_user';
-const AUTH_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-let currentUser = null;   // { email, name, picture }
+let currentUser = null;   // { email }
 let isAdmin = false;
-let allowedAccounts = [];  // account names this user can see
+let allowedAccounts = [];
 let allAccounts = [];
 let allCycles = [];
 let allLeads = [];
@@ -17,56 +15,120 @@ let activeLeadFilter = 'all';
 let currentAccountName = '';
 
 // ═══════════════════════════════════════════════
-//  AUTH
+//  FIREBASE AUTH
 // ═══════════════════════════════════════════════
 
-function decodeJwt(token) {
-  const payload = token.split('.')[1];
-  return JSON.parse(atob(payload.replace(/-/g,'+').replace(/_/g,'/')));
+firebase.initializeApp(CONFIG.FIREBASE);
+const auth = firebase.auth();
+
+// Check URL params for invite signup flow
+const _urlParams = new URLSearchParams(window.location.search);
+const _inviteEmail = _urlParams.get('email');
+const _inviteAccount = _urlParams.get('account');
+
+function initAuth() {
+  auth.onAuthStateChanged(user => {
+    if (user) {
+      onAuthSuccess({ email: user.email });
+    } else {
+      showAuthGate();
+    }
+  });
 }
 
-function checkExistingSession() {
+function showAuthGate() {
+  document.getElementById('auth-gate').classList.remove('hidden');
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('loading-state').classList.add('hidden');
+  document.getElementById('access-denied').classList.add('hidden');
+
+  // If invite link, show signup form with pre-filled email
+  if (_inviteEmail) {
+    showSignupForm();
+    document.getElementById('signup-email').value = _inviteEmail;
+    if (_inviteAccount) {
+      document.getElementById('signup-msg').textContent = 'Create your account to view ' + _inviteAccount + "'s dashboard";
+    }
+  }
+}
+
+function showLoginForm() {
+  document.getElementById('login-form').classList.remove('hidden');
+  document.getElementById('signup-form').classList.add('hidden');
+  document.getElementById('reset-form').classList.add('hidden');
+  document.getElementById('auth-error').textContent = '';
+}
+
+function showSignupForm() {
+  document.getElementById('login-form').classList.add('hidden');
+  document.getElementById('signup-form').classList.remove('hidden');
+  document.getElementById('reset-form').classList.add('hidden');
+  document.getElementById('signup-error').textContent = '';
+}
+
+function showResetForm() {
+  document.getElementById('login-form').classList.add('hidden');
+  document.getElementById('signup-form').classList.add('hidden');
+  document.getElementById('reset-form').classList.remove('hidden');
+  document.getElementById('reset-error').textContent = '';
+}
+
+async function handleLogin() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errEl = document.getElementById('auth-error');
+  errEl.textContent = '';
+  if (!email || !password) { errEl.textContent = 'Enter email and password'; return; }
   try {
-    const stored = JSON.parse(localStorage.getItem(AUTH_KEY));
-    if (stored && stored.email && (Date.now() - stored.ts) < AUTH_TTL) {
-      onAuthSuccess(stored, false);
-      return;
-    }
-  } catch(e) {}
-  showLoginGate();
+    await auth.signInWithEmailAndPassword(email, password);
+  } catch(e) {
+    if (e.code === 'auth/user-not-found') errEl.textContent = 'No account found with this email.';
+    else if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') errEl.textContent = 'Incorrect password.';
+    else if (e.code === 'auth/too-many-requests') errEl.textContent = 'Too many attempts. Try again later.';
+    else errEl.textContent = e.message;
+  }
 }
 
-function showLoginGate() {
-  document.getElementById('login-gate').classList.remove('hidden');
-  let retries = 0;
-  const init = () => {
-    if (typeof google !== 'undefined' && google.accounts) {
-      google.accounts.id.initialize({
-        client_id: CONFIG.GOOGLE_CLIENT_ID,
-        callback: handleGoogleSignIn,
-        auto_select: true,
-      });
-      google.accounts.id.renderButton(document.getElementById('google-btn'), {
-        theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', width: 280,
-      });
-    } else if (retries++ < 50) {
-      setTimeout(init, 100);
-    }
-  };
-  init();
+async function handleSignup() {
+  const email = document.getElementById('signup-email').value.trim();
+  const password = document.getElementById('signup-password').value;
+  const confirm = document.getElementById('signup-confirm').value;
+  const errEl = document.getElementById('signup-error');
+  errEl.textContent = '';
+  if (!email) { errEl.textContent = 'Email is required'; return; }
+  if (password.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; return; }
+  if (password !== confirm) { errEl.textContent = 'Passwords do not match'; return; }
+  try {
+    await auth.createUserWithEmailAndPassword(email, password);
+    // Clean up URL params after successful signup
+    window.history.replaceState({}, '', window.location.pathname);
+  } catch(e) {
+    if (e.code === 'auth/email-already-in-use') errEl.textContent = 'An account with this email already exists. Try signing in.';
+    else if (e.code === 'auth/weak-password') errEl.textContent = 'Password is too weak.';
+    else errEl.textContent = e.message;
+  }
 }
 
-function handleGoogleSignIn(response) {
-  const jwt = decodeJwt(response.credential);
-  const user = { email: jwt.email, name: jwt.name, picture: jwt.picture, ts: Date.now() };
-  localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-  onAuthSuccess(user, true);
+async function handleReset() {
+  const email = document.getElementById('reset-email').value.trim();
+  const errEl = document.getElementById('reset-error');
+  errEl.textContent = '';
+  if (!email) { errEl.textContent = 'Enter your email'; return; }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    errEl.style.color = '#34d399';
+    errEl.textContent = 'Reset email sent. Check your inbox.';
+  } catch(e) {
+    errEl.style.color = '#f87171';
+    if (e.code === 'auth/user-not-found') errEl.textContent = 'No account found with this email.';
+    else errEl.textContent = e.message;
+  }
 }
 
-function onAuthSuccess(user, freshLogin) {
+function onAuthSuccess(user) {
   currentUser = user;
   isAdmin = user.email.endsWith('@' + CONFIG.ADMIN_DOMAIN);
-  document.getElementById('login-gate').classList.add('hidden');
+  document.getElementById('auth-gate').classList.add('hidden');
   document.getElementById('user-email').textContent = user.email;
   if (isAdmin) document.getElementById('admin-badge').classList.remove('hidden');
   document.getElementById('loading-state').classList.remove('hidden');
@@ -74,14 +136,13 @@ function onAuthSuccess(user, freshLogin) {
 }
 
 function handleSignOut() {
-  localStorage.removeItem(AUTH_KEY);
-  try { google.accounts.id.disableAutoSelect(); } catch(e) {}
+  auth.signOut();
   currentUser = null;
   isAdmin = false;
   document.getElementById('app').classList.add('hidden');
   document.getElementById('access-denied').classList.add('hidden');
   document.getElementById('loading-state').classList.add('hidden');
-  showLoginGate();
+  showAuthGate();
 }
 
 // ═══════════════════════════════════════════════
@@ -874,4 +935,4 @@ function setLeadFilter(filter) {
 //  INIT
 // ═══════════════════════════════════════════════
 
-document.addEventListener('DOMContentLoaded', () => checkExistingSession());
+document.addEventListener('DOMContentLoaded', () => initAuth());

@@ -385,8 +385,11 @@ function isExtendedCycle(cycle) {
 function getActiveCycle(acct) {
   if (!acct || !acct.cycles || !acct.cycles.length) return null;
   const today = getTodayStr();
-  const active = acct.cycles.find(c => c.cycleStartDate && c.cycleEndDate && c.cycleStartDate <= today && c.cycleEndDate >= today);
-  return active || acct.cycles[acct.cycles.length - 1];
+  // Find all cycles that contain today, then pick the latest one (highest start date)
+  const active = acct.cycles
+    .filter(c => c.cycleStartDate && c.cycleEndDate && c.cycleStartDate <= today && c.cycleEndDate >= today)
+    .sort((a, b) => b.cycleStartDate.localeCompare(a.cycleStartDate));
+  return active[0] || acct.cycles[acct.cycles.length - 1];
 }
 
 function getTodayStr() {
@@ -485,7 +488,6 @@ function renderDashboard(accountName) {
             <div class="kpi-label">Projected Bookings</div>
             <div class="kpi-value">${fmt(active.estBookedAppts)}</div>
             <div class="kpi-sub">of ${fmt(active.bookedGoal)} goal</div>
-            <div class="kpi-disclaimer" title="Projections are based on current pacing and typically trend upward as leads continue to convert throughout the cycle. Late-stage bookings, callback conversions, and follow-up appointments often close in the final weeks.">* Projection only &mdash; hover for details</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">Ad Spend</div>
@@ -496,10 +498,9 @@ function renderDashboard(accountName) {
             <div class="kpi-label">Cost Per Lead</div>
             <div class="kpi-value">${fmtDollar(active.cpa, 2)}</div>
           </div>
-          <div class="kpi-card">
-            <div class="kpi-label">OSA Rate</div>
-            <div class="kpi-value">${active.osaPct ? fmtPct(active.osaPct) : '--'}</div>
-          </div>
+        </div>
+        <div class="projection-disclaimer">
+          * Projected Bookings is an estimate based on current pacing. This number typically increases as the cycle progresses — leads from earlier in the cycle often convert to booked appointments later through follow-up calls, callbacks, and rescheduled consultations. Final results are usually higher than mid-cycle projections.
         </div>
       </div>
     `;

@@ -12,6 +12,9 @@ let isAdmin = false;
 let allowedAccounts = [];  // account names this user can see
 let allAccounts = [];
 let allCycles = [];
+let allLeads = [];
+let activeLeadFilter = 'all';
+let currentAccountName = '';
 
 // ═══════════════════════════════════════════════
 //  AUTH
@@ -90,15 +93,17 @@ async function loadAndRender() {
     // 1. Discover pods from Apps Script (same as Command Centre)
     await discoverPods();
 
-    // 2. Fetch client access mapping + all pod data in parallel
-    const [accessMap, podResults] = await Promise.all([
+    // 2. Fetch client access mapping + pod data + lead data in parallel
+    const [accessMap, podResults, leadResults] = await Promise.all([
       fetchClientAccess(),
-      fetchAllPods()
+      fetchAllPods(),
+      fetchAllLeads()
     ]);
 
-    // 3. Merge pod results
+    // 3. Merge pod + lead results
     allAccounts = [];
     allCycles = [];
+    allLeads = leadResults.flat();
     for (const result of podResults) {
       if (!result) continue;
       allAccounts.push(...result.accounts);
@@ -205,6 +210,110 @@ async function fetchPodData(podName, gid) {
     return null;
   }
 }
+
+// ═══════════════════════════════════════════════
+//  LEAD DATA
+// ═══════════════════════════════════════════════
+
+async function fetchAllLeads() {
+  const entries = Object.entries(CONFIG.LEAD_SHEETS || {});
+  const results = await Promise.all(entries.map(([name, gid]) => fetchLeadData(name, gid)));
+  return results;
+}
+
+async function fetchLeadData(sheetName, gid) {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+    const resp = await fetch(url);
+    const text = await resp.text();
+    return parseLeadCSV(text, sheetName);
+  } catch(e) {
+    console.warn(`Failed to fetch leads ${sheetName}:`, e.message);
+    return [];
+  }
+}
+
+function parseLeadCSV(csvText, source) {
+  const lines = csvText.split('\n');
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+
+  const iDate = headers.findIndex(h => h === 'date');
+  const iSub = headers.findIndex(h => h.includes('subaccount') || h.includes('sub account') || h === 'business' || h === 'business name');
+  const iName = headers.findIndex(h => h === 'name');
+  const iStatus = headers.findIndex(h => h === 'status');
+  const iAddress = headers.findIndex(h => h === 'address');
+  const iDistance = headers.findIndex(h => h.includes('distance'));
+
+  // Find follow-up note columns
+  const noteIdxs = [];
+  headers.forEach((h, i) => { if (/call|follow|day/.test(h)) noteIdxs.push(i); });
+
+  if (iDate < 0 || iSub < 0) return [];
+
+  const leads = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const cols = parseCSVLine(lines[i]);
+    const subAccount = (cols[iSub] || '').trim();
+    if (!subAccount) continue;
+
+    // Parse date (M/D/YYYY → YYYY-MM-DD)
+    let date = (cols[iDate] || '').trim();
+    const dm = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (dm) date = `${dm[3]}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`;
+
+    // Last non-empty follow-up note
+    let lastNote = '';
+    for (let ni = noteIdxs.length - 1; ni >= 0; ni--) {
+      const v = (cols[noteIdxs[ni]] || '').trim();
+      if (v) { lastNote = v; break; }
+    }
+
+    leads.push({
+      source,
+      date,
+      subAccount,
+      name: (cols[iName] || '').trim(),
+      status: (cols[iStatus] || '').trim(),
+      address: (cols[iAddress] || '').trim(),
+      distance: (cols[iDistance] || '').trim(),
+      lastNote,
+    });
+  }
+  return leads;
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { result.push(current); current = ''; }
+    else { current += ch; }
+  }
+  result.push(current);
+  return result;
+}
+
+function getLeadsForAccount(accountName, startDate, endDate) {
+  return allLeads.filter(l => {
+    const nameMatch = l.subAccount.toLowerCase().includes(accountName.toLowerCase()) ||
+                      accountName.toLowerCase().includes(l.subAccount.toLowerCase());
+    if (!nameMatch) return false;
+    if (startDate && endDate && l.date) return l.date >= startDate && l.date <= endDate;
+    return true;
+  });
+}
+
+function isBookedStatus(s) { const low = (s||'').toLowerCase(); return (low.includes('confirmed') && !low.includes('unconfirmed')) || low.includes('manual booked'); }
+function isClientHandles(s) { const low = (s||'').toLowerCase(); return low.includes('client handles') || low.includes('satellite') || low.includes('sat quote') || low.includes('sat. qt'); }
+function isCancelledStatus(s) { const low = (s||'').toLowerCase(); return low.includes('cancel') || low.includes('invalid') || low.includes('not responding') || low === 'nr'; }
+function isOpenStatus(s) { return !isBookedStatus(s) && !isClientHandles(s) && !isCancelledStatus(s); }
+function leadStatusColor(s) { if (isBookedStatus(s)) return 'lead-booked'; if (isClientHandles(s)) return 'lead-client'; if (isCancelledStatus(s)) return 'lead-cancelled'; return 'lead-open'; }
+function leadStatusLabel(s) { if (isBookedStatus(s)) return 'Booked'; if (isClientHandles(s)) return 'Client Handles'; if (isCancelledStatus(s)) return 'Lost'; return 'Open'; }
 
 // ═══════════════════════════════════════════════
 //  SHEET PARSER (simplified from Command Centre)
@@ -508,6 +617,11 @@ function renderDashboard(accountName) {
     currentHtml = `<div class="glass" style="padding:40px;text-align:center;margin-bottom:24px;"><p style="color:#64748b;">No active cycle found.</p></div>`;
   }
 
+  // ── Lead Widget ──
+  currentAccountName = accountName;
+  activeLeadFilter = 'all';
+  const leadHtml = renderLeadWidget(accountName, active);
+
   // ── Cycle History ──
   let historyHtml = '';
   if (pastCycles.length > 0) {
@@ -546,7 +660,88 @@ function renderDashboard(accountName) {
     `;
   }
 
-  el.innerHTML = currentHtml + historyHtml;
+  el.innerHTML = currentHtml + leadHtml + historyHtml;
+}
+
+// ═══════════════════════════════════════════════
+//  LEAD WIDGET
+// ═══════════════════════════════════════════════
+
+function renderLeadWidget(accountName, activeCycle) {
+  const startDate = activeCycle ? activeCycle.cycleStartDate : null;
+  const endDate = activeCycle ? activeCycle.cycleEndDate : null;
+  const leads = getLeadsForAccount(accountName, startDate, endDate);
+
+  if (leads.length === 0) {
+    return `<div class="glass" style="padding:24px;margin-bottom:24px;">
+      <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:12px;">Lead Activity</h3>
+      <p style="color:#64748b;text-align:center;padding:20px 0;">No leads found for this cycle.</p>
+    </div>`;
+  }
+
+  const booked = leads.filter(l => isBookedStatus(l.status)).length;
+  const clientH = leads.filter(l => isClientHandles(l.status)).length;
+  const cancelled = leads.filter(l => isCancelledStatus(l.status)).length;
+  const open = leads.filter(l => isOpenStatus(l.status)).length;
+
+  const fActive = (f) => activeLeadFilter === f ? 'active' : '';
+
+  // Filter leads
+  let filtered = leads;
+  if (activeLeadFilter === 'booked') filtered = leads.filter(l => isBookedStatus(l.status));
+  else if (activeLeadFilter === 'client') filtered = leads.filter(l => isClientHandles(l.status));
+  else if (activeLeadFilter === 'cancelled') filtered = leads.filter(l => isCancelledStatus(l.status));
+  else if (activeLeadFilter === 'open') filtered = leads.filter(l => isOpenStatus(l.status));
+
+  // Group by date
+  const byDate = {};
+  for (const l of filtered) {
+    const d = l.date || 'Unknown';
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(l);
+  }
+  const dates = Object.keys(byDate).sort().reverse();
+
+  const rows = dates.map(d => {
+    const dayLeads = byDate[d];
+    return dayLeads.map((l, idx) => `
+      <tr>
+        ${idx === 0 ? `<td rowspan="${dayLeads.length}" style="vertical-align:top;color:#94a3b8;white-space:nowrap;">${fmtDateShort(d)} <span style="color:#475569;">(${dayLeads.length})</span></td>` : ''}
+        <td class="${leadStatusColor(l.status)}" style="font-weight:500;">${l.name || '--'}</td>
+        <td class="${leadStatusColor(l.status)}">${leadStatusLabel(l.status)}</td>
+        <td style="color:#64748b;" class="mobile-hide">${l.lastNote || '--'}</td>
+      </tr>
+    `).join('');
+  }).join('');
+
+  return `
+    <div class="glass" style="padding:24px;margin-bottom:24px;">
+      <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:16px;">Lead Activity</h3>
+      <div class="lead-filters">
+        <span class="filter-badge fb-green ${fActive('booked')}" onclick="setLeadFilter('booked')">${booked} booked</span>
+        <span class="filter-badge fb-yellow ${fActive('client')}" onclick="setLeadFilter('client')">${clientH} other</span>
+        <span class="filter-badge fb-red ${fActive('cancelled')}" onclick="setLeadFilter('cancelled')">${cancelled} lost</span>
+        <span class="filter-badge fb-white ${fActive('open')}" onclick="setLeadFilter('open')">${open} open</span>
+        <span class="filter-badge fb-blue ${fActive('all')}" onclick="setLeadFilter('all')">${leads.length} total</span>
+      </div>
+      <div style="overflow-x:auto;max-height:500px;overflow-y:auto;">
+        <table class="lead-table">
+          <thead><tr>
+            <th>Date</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th class="mobile-hide">Last Note</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:#64748b;padding:20px;">No leads match this filter.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function setLeadFilter(filter) {
+  activeLeadFilter = activeLeadFilter === filter ? 'all' : filter;
+  renderDashboard(currentAccountName);
 }
 
 // ═══════════════════════════════════════════════
